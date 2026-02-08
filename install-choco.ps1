@@ -42,7 +42,8 @@ $packages = @(
     "python",
     "notepadplusplus",
     "googlechrome",
-    "ffmpeg"
+    "ffmpeg",
+    "7zip"
 )
 
 foreach ($package in $packages) {
