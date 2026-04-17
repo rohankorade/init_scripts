@@ -310,6 +310,16 @@ function Install-Scoop {
 function Install-Winget {
     Write-Log "SECTION" "Installing winget"
 
+    # winget requires Windows App Runtime (WinUI 3 / WindowsAppSDK) which is
+    # not supported on Windows Server SKUs (exits 0x8000000B). Skip gracefully.
+    $os = (Get-WmiObject Win32_OperatingSystem).Caption
+    if ($os -match "Server") {
+        Write-Log "WARN" "winget is not supported on Windows Server SKUs (requires WinAppRuntime/WinUI 3 — Desktop only). Skipping."
+        Write-Log "INFO" "All packages in this script are installed via Chocolatey, so winget is not required."
+        Add-Result -Step "winget" -Item "winget" -Success $true -Detail "Skipped — not supported on Server SKU"
+        return
+    }
+
     if (Test-CommandExists "winget") {
         Write-Log "OK" "winget already installed: $(winget --version)"
         Add-Result -Step "winget" -Item "winget" -Success $true -Detail "Pre-existing"
