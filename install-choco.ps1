@@ -114,6 +114,15 @@ function Install-ScoopPackage {
     }
 }
 
+function Invoke-Download {
+    # curl.exe is built into Windows Server 2022 and is 5-10x faster than
+    # Invoke-WebRequest (which loads the IE COM engine under the hood).
+    # Flags: -L follow redirects, -f fail on HTTP errors, -s silent, --retry 3
+    param([string]$Url, [string]$OutFile)
+    $result = curl.exe -L -f -s -S --retry 3 --retry-delay 2 -o $OutFile $Url 2>&1
+    if ($LASTEXITCODE -ne 0) { throw "curl failed (exit $LASTEXITCODE): $result" }
+}
+
 # ============================================================
 # REGION: Pre-flight Checks
 # ============================================================
@@ -161,37 +170,67 @@ function Install-WindowsTerminalDeps {
     Write-Log "SECTION" "Installing Windows Terminal Dependencies"
     $tmp = $env:TEMP
 
-    Invoke-Step -Name "WinTermDeps" -Item "VCLibs x64 14.00" -Action {
-        if (Get-AppxPackage "*VCLibs*x64*" -AllUsers -ErrorAction SilentlyContinue) {
-            Write-Log "INFO" "    Already installed, skipping"
-            return
+    # Check which deps are actually missing before downloading anything
+    $needVCLibs   = -not (Get-AppxPackage "*VCLibs*x64*"       -AllUsers -ErrorAction SilentlyContinue)
+    $needUIXaml   = -not (Get-AppxPackage "*UI.Xaml.2.8*"      -AllUsers -ErrorAction SilentlyContinue)
+    $needRuntime  = -not (Get-AppxPackage "*WindowsAppRuntime*" -AllUsers -ErrorAction SilentlyContinue)
+
+    if (-not ($needVCLibs -or $needUIXaml -or $needRuntime)) {
+        Write-Log "OK" "All Windows Terminal dependencies already installed, skipping"
+        Add-Result -Step "WinTermDeps" -Item "All deps" -Success $true -Detail "Pre-existing"
+        return
+    }
+
+    # Download all missing files in parallel via Start-Job (curl.exe)
+    Write-Log "INFO" "  Downloading dependencies in parallel..."
+    $jobs = @()
+
+    if ($needVCLibs) {
+        $jobs += Start-Job -ScriptBlock {
+            curl.exe -L -f -s -S --retry 3 --retry-delay 2 `
+                -o "$using:tmp\VCLibs.appx" `
+                "https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx"
+            $LASTEXITCODE
         }
-        $dest = "$tmp\VCLibs.appx"
-        Invoke-WebRequest "https://aka.ms/Microsoft.VCLibs.x64.14.00.Desktop.appx" `
-            -OutFile $dest -UseBasicParsing
-        Add-AppxPackage $dest -ErrorAction SilentlyContinue
+    }
+    if ($needUIXaml) {
+        $jobs += Start-Job -ScriptBlock {
+            curl.exe -L -f -s -S --retry 3 --retry-delay 2 `
+                -o "$using:tmp\UIXaml.appx" `
+                "https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx"
+            $LASTEXITCODE
+        }
+    }
+    if ($needRuntime) {
+        $jobs += Start-Job -ScriptBlock {
+            curl.exe -L -f -s -S --retry 3 --retry-delay 2 `
+                -o "$using:tmp\WinAppRuntime.exe" `
+                "https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-x64.exe"
+            $LASTEXITCODE
+        }
+    }
+
+    # Wait for all downloads to complete
+    $jobs | Wait-Job | ForEach-Object {
+        $exitCode = Receive-Job $_
+        if ($exitCode -ne 0) { Write-Log "WARN" "  A parallel download returned exit code $exitCode" }
+        Remove-Job $_
+    }
+
+    # Install in dependency order
+    Invoke-Step -Name "WinTermDeps" -Item "VCLibs x64 14.00" -Action {
+        if (-not $needVCLibs) { Write-Log "INFO" "    Already installed, skipping"; return }
+        Add-AppxPackage "$tmp\VCLibs.appx" -ErrorAction SilentlyContinue
     }
 
     Invoke-Step -Name "WinTermDeps" -Item "Microsoft.UI.Xaml 2.8" -Action {
-        if (Get-AppxPackage "*UI.Xaml.2.8*" -AllUsers -ErrorAction SilentlyContinue) {
-            Write-Log "INFO" "    Already installed, skipping"
-            return
-        }
-        $dest = "$tmp\UIXaml.appx"
-        Invoke-WebRequest "https://github.com/microsoft/microsoft-ui-xaml/releases/download/v2.8.6/Microsoft.UI.Xaml.2.8.x64.appx" `
-            -OutFile $dest -UseBasicParsing
-        Add-AppxPackage $dest -ErrorAction SilentlyContinue
+        if (-not $needUIXaml) { Write-Log "INFO" "    Already installed, skipping"; return }
+        Add-AppxPackage "$tmp\UIXaml.appx" -ErrorAction SilentlyContinue
     }
 
     Invoke-Step -Name "WinTermDeps" -Item "Windows App Runtime 1.8" -Action {
-        if (Get-AppxPackage "*WindowsAppRuntime*" -AllUsers -ErrorAction SilentlyContinue) {
-            Write-Log "INFO" "    Already installed, skipping"
-            return
-        }
-        $dest = "$tmp\WinAppRuntime.exe"
-        Invoke-WebRequest "https://aka.ms/windowsappsdk/1.8/latest/windowsappruntimeinstall-x64.exe" `
-            -OutFile $dest -UseBasicParsing
-        $proc = Start-Process $dest -ArgumentList "--quiet --force" -Wait -PassThru
+        if (-not $needRuntime) { Write-Log "INFO" "    Already installed, skipping"; return }
+        $proc = Start-Process "$tmp\WinAppRuntime.exe" -ArgumentList "--quiet --force" -Wait -PassThru
         if ($proc.ExitCode -notin @(0, 3010)) { throw "WinAppRuntime installer exited $($proc.ExitCode)" }
     }
 }
