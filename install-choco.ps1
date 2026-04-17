@@ -313,7 +313,11 @@ function Install-Winget {
 
     Invoke-Step -Name "winget" -Item "winget (via Install-Script)" -Action {
         Install-Script -Name winget-install -Force -ErrorAction Stop
-        winget-install
+        # Refresh PATH before winget-install runs its own post-install detection check,
+        # so it finds winget immediately and doesn't emit the "not detected" warning.
+        # 3>$null suppresses any residual PowerShell Warning stream output from the script.
+        Refresh-Env
+        winget-install 3>$null
         Refresh-Env
         if (-not (Test-CommandExists "winget")) {
             Write-Log "WARN" "    winget not immediately on PATH — may require reboot"
@@ -410,7 +414,7 @@ function Install-Java {
     Refresh-Env
 
     if (Test-CommandExists "java") {
-        $ver = & java -version 2>&1 | Select-Object -First 1
+        $ver = & { $ErrorActionPreference = 'Continue'; java -version 2>&1 } | Select-Object -First 1
         Write-Log "OK" "Java already on PATH: $ver"
         Add-Result -Step "Java" -Item "java" -Success $true -Detail $ver
         return
@@ -466,7 +470,7 @@ function Install-Java {
 
     Invoke-Step -Name "Java" -Item "Verify java in PATH" -Action {
         if (-not (Test-CommandExists "java")) { throw "java not found in PATH after setup" }
-        Write-Log "OK" "    $(& java -version 2>&1 | Select-Object -First 1)"
+        Write-Log "OK" "    $(& { $ErrorActionPreference = 'Continue'; java -version 2>&1 } | Select-Object -First 1)"
     }
 }
 
@@ -772,7 +776,7 @@ function Invoke-Verification {
         "scoop"   = { scoop --version }
         "python"  = { python --version }
         "pip"     = { python -m pip --version }
-        "java"    = { java -version 2>&1 | Select-Object -First 1 }
+        "java"    = { & { $ErrorActionPreference = 'Continue'; java -version 2>&1 } | Select-Object -First 1 }
         "git"     = { git --version }
         "ffmpeg"  = { ffmpeg -version 2>&1 | Select-Object -First 1 }
         "7z"      = { 7z i 2>&1 | Select-Object -First 1 }
