@@ -804,14 +804,14 @@ function Show-Summary {
 
     $grouped = $script:Results | Group-Object Step
     foreach ($group in $grouped) {
-        $ok     = ($group.Group | Where-Object Status -eq "OK").Count
-        $failed = ($group.Group | Where-Object Status -eq "FAILED").Count
+        $ok     = @($group.Group | Where-Object Status -eq "OK").Count
+        $failed = @($group.Group | Where-Object Status -eq "FAILED").Count
         $colour = if ($failed -gt 0) { "Yellow" } else { "Green" }
         Write-Host "  [$($group.Name)]  OK: $ok  FAILED: $failed" -ForegroundColor $colour
     }
 
-    $totalOk     = ($script:Results | Where-Object Status -eq "OK").Count
-    $totalFailed = ($script:Results | Where-Object Status -eq "FAILED").Count
+    $totalOk     = @($script:Results | Where-Object Status -eq "OK").Count
+    $totalFailed = @($script:Results | Where-Object Status -eq "FAILED").Count
 
     Write-Host ""
     Write-Host "  Total: $totalOk succeeded, $totalFailed failed" -ForegroundColor $(if ($totalFailed -gt 0) { "Yellow" } else { "Green" })
