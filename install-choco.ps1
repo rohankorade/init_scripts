@@ -283,16 +283,21 @@ function Install-Scoop {
 
     Invoke-Step -Name "Scoop" -Item "Scoop package manager" -ContinueOnError $false -Action {
         $env:SCOOP = "$env:USERPROFILE\scoop"
-        # Set execution policy required by Scoop, then invoke with -RunAsAdmin to allow admin installs.
-        # iex "& {$(irm ...)} -RunAsAdmin" is the only form that correctly passes the flag through.
-        Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+
+        # Only set execution policy if not already permissive enough.
+        # A GPO override may block the Set-ExecutionPolicy call — suppress the
+        # error since Bypass (the GPO-enforced policy) is already more permissive.
+        $effectivePolicy = Get-ExecutionPolicy
+        if ($effectivePolicy -notin @("Bypass", "Unrestricted", "RemoteSigned")) {
+            Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force -ErrorAction SilentlyContinue
+        }
+
         iex "& {$(irm get.scoop.sh)} -RunAsAdmin"
         Refresh-Env
         if (-not (Test-CommandExists "scoop")) { throw "scoop not found after install" }
         Write-Log "OK" "    Scoop installed to $env:SCOOP"
     }
 
-    # Add extras bucket (provides gifsicle)
     Invoke-Step -Name "Scoop" -Item "scoop bucket: extras" -Action {
         scoop bucket add extras 2>&1 | Out-Null
     }
