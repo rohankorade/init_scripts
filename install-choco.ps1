@@ -332,6 +332,9 @@ function Install-WindowsTerminal {
         return
     }
 
+    # choco resolves and installs VCLibs / UI.Xaml / WinAppRuntime itself,
+    # pulling from the Chocolatey CDN (much faster than download.microsoft.com
+    # for users outside the US).
     Install-ChocoPackage -Step "WindowsTerminal" -PackageId "microsoft-windows-terminal"
 
     # Register + add to PATH
@@ -564,7 +567,6 @@ try {
     Write-Log "SECTION" "Server Setup — $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')"
 
     Invoke-Preflight
-    Install-WindowsTerminalDeps
     Install-Chocolatey
     Install-Scoop
     Install-Winget
