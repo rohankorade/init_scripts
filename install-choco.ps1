@@ -327,7 +327,7 @@ function Install-Winget {
 
     Invoke-Step -Name "winget" -Item "winget (via Install-Script)" -Action {
         Install-Script -Name winget-install -Force -ErrorAction Stop
-        winget-install -Force
+        winget-install
         Refresh-Env
         if (-not (Test-CommandExists "winget")) {
             Write-Log "WARN" "    winget not immediately on PATH — may require reboot"
@@ -335,6 +335,37 @@ function Install-Winget {
             Write-Log "OK" "    winget $(winget --version)"
         }
     }
+}
+
+# ============================================================
+# REGION: winget Packages
+# ============================================================
+
+function Install-WingetPackages {
+    Write-Log "SECTION" "Installing winget Packages"
+
+    if (-not (Test-CommandExists "winget")) {
+        Write-Log "WARN" "winget not available — skipping winget packages"
+        Add-Result -Step "WingetPackages" -Item "winget packages" -Success $true -Detail "Skipped — winget not available"
+        return
+    }
+
+    $wingetPackages = [ordered]@{
+        "Google.Chrome" = "Google Chrome"
+    }
+
+    foreach ($id in $wingetPackages.Keys) {
+        $label = $wingetPackages[$id]
+        Invoke-Step -Name "WingetPackages" -Item "winget: $label" -Action {
+            # --accept-source-agreements and --accept-package-agreements suppress interactive prompts
+            $result = winget install --id $id --silent --accept-source-agreements --accept-package-agreements 2>&1
+            if ($LASTEXITCODE -notin @(0, -1978335189)) {   # -1978335189 = WINGET_INSTALLED_ALREADY
+                throw "winget exited $LASTEXITCODE`n$result"
+            }
+        }
+    }
+
+    Refresh-Env
 }
 
 # ============================================================
@@ -411,7 +442,7 @@ function Install-ChocoPackages {
     $packages = [ordered]@{
         "python"                      = @()          # Python 3 (latest stable)
         "notepadplusplus"             = @()
-        "googlechrome"                = @()
+        # googlechrome removed — choco chrome install fails on Server; installed via winget instead
         "ffmpeg"                      = @()
         "7zip"                        = @()
         "qbittorrent"                 = @()
@@ -784,6 +815,7 @@ try {
     Install-Chocolatey
     Install-Scoop
     Install-Winget
+    Install-WingetPackages       # Chrome (and any other winget-only packages)
     Install-WindowsTerminal
     Install-Java
     Install-ChocoPackages
