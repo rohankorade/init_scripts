@@ -283,10 +283,9 @@ function Install-Scoop {
 
     Invoke-Step -Name "Scoop" -Item "Scoop package manager" -ContinueOnError $false -Action {
         $env:SCOOP = "$env:USERPROFILE\scoop"
-        # SCOOP_ALLOW_RUN_AS_ADMIN=1 is required when running as Administrator.
-        # Without it Scoop prints "Running the installer as administrator is disabled by default" and aborts.
-        $env:SCOOP_ALLOW_RUN_AS_ADMIN = '1'
-        Invoke-RestMethod -Uri "https://get.scoop.sh" | Invoke-Expression
+        # Scoop's installer blocks execution when run as Administrator unless -RunAsAdmin is passed.
+        # Piping irm ... | iex swallows parameters, so we must invoke via ScriptBlock to pass the flag.
+        & ([ScriptBlock]::Create((Invoke-RestMethod -Uri "https://get.scoop.sh"))) -RunAsAdmin
         Refresh-Env
         if (-not (Test-CommandExists "scoop")) { throw "scoop not found after install" }
         Write-Log "OK" "    Scoop installed to $env:SCOOP"
