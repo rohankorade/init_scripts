@@ -231,7 +231,16 @@ function Install-WindowsTerminalDeps {
     Invoke-Step -Name "WinTermDeps" -Item "Windows App Runtime 1.8" -Action {
         if (-not $needRuntime) { Write-Log "INFO" "    Already installed, skipping"; return }
         $proc = Start-Process "$tmp\WinAppRuntime.exe" -ArgumentList "--quiet --force" -Wait -PassThru
-        if ($proc.ExitCode -notin @(0, 3010)) { throw "WinAppRuntime installer exited $($proc.ExitCode)" }
+        # 0      = success
+        # 3010   = success, reboot required
+        # -2147483637 (0x8000000B) = not supported on this SKU (Windows Server) — non-fatal
+        if ($proc.ExitCode -in @(0, 3010, -2147483637)) {
+            if ($proc.ExitCode -eq -2147483637) {
+                Write-Log "WARN" "    WinAppRuntime not supported on this Windows Server SKU — skipping (Windows Terminal will be installed via Chocolatey which bundles its own deps)"
+            }
+        } else {
+            throw "WinAppRuntime installer exited $($proc.ExitCode)"
+        }
     }
 }
 
@@ -273,9 +282,10 @@ function Install-Scoop {
     }
 
     Invoke-Step -Name "Scoop" -Item "Scoop package manager" -ContinueOnError $false -Action {
-        # Scoop requires running as a non-admin user OR with SCOOP env set
-        # On Server, run with the -RunAsAdmin workaround
         $env:SCOOP = "$env:USERPROFILE\scoop"
+        # SCOOP_ALLOW_RUN_AS_ADMIN=1 is required when running as Administrator.
+        # Without it Scoop prints "Running the installer as administrator is disabled by default" and aborts.
+        $env:SCOOP_ALLOW_RUN_AS_ADMIN = '1'
         Invoke-RestMethod -Uri "https://get.scoop.sh" | Invoke-Expression
         Refresh-Env
         if (-not (Test-CommandExists "scoop")) { throw "scoop not found after install" }
@@ -422,28 +432,223 @@ function Install-PipPackages {
     }
 
     $pipPackages = @(
-        # Date & time
-        "python-dateutil",    # Provides dateutil.parser.parse  (covers "parsedate")
-        "arrow",              # Friendlier datetime wrapper
 
-        # Numerics / data
-        "numpy",
-        "pandas",
+        # ── Web Frameworks & APIs ──────────────────────────────
+        "fastapi",
+        "flask",
+        "flask-cors",
+        "flask-restful",
+        "starlette",
+        "uvicorn",
+        "gunicorn",
+        "waitress",
+        "tornado",
+        "bottle",
+        "django",
 
-        # HTTP / networking
+        # ── HTTP & Networking ──────────────────────────────────
         "requests",
         "httpx",
+        "urllib3",
+        "aiohttp",
+        "websockets",
+        "certifi",
+        "chardet",
+        "h2",
 
-        # CLI / dev utilities
-        "rich",               # Beautiful terminal output
-        "tqdm",               # Progress bars
-        "pydantic",           # Data validation
-        "python-dotenv",      # .env file loading
-        "loguru",             # Better logging
-        "click",              # CLI framework
-        "colorama",           # Windows terminal colours
-        "psutil",             # System/process info
-        "pywin32",            # Windows API bindings
+        # ── HTML Parsing & Scraping ────────────────────────────
+        "beautifulsoup4",     # imported as bs4
+        "lxml",
+        "html5lib",
+        "scrapy",
+        "playwright",
+        "parsel",
+        "trafilatura",
+        "tldextract",
+
+        # ── Data & Excel ───────────────────────────────────────
+        "pandas",
+        "openpyxl",
+        "xlsxwriter",
+        "xlrd",
+        "numpy",
+        "polars",
+        "pyarrow",
+        "tabulate",
+        "natsort",
+
+        # ── Image Processing ───────────────────────────────────
+        "Pillow",             # imported as PIL
+        "matplotlib",
+
+        # ── Database ───────────────────────────────────────────
+        "pymongo",
+        "motor",              # async MongoDB
+        "sqlalchemy",
+        "psycopg2-binary",
+        "pymysql",
+        "redis",
+        "peewee",
+        "tinydb",
+        "alembic",
+        "diskcache",
+
+        # ── Logging & CLI ──────────────────────────────────────
+        "rich",
+        "loguru",
+        "colorama",
+        "texttable",
+        "tqdm",
+        "pyfiglet",
+        "click",
+        "typer",
+        "prompt-toolkit",
+        "structlog",
+        "python-json-logger",
+        "sentry-sdk",
+
+        # ── Authentication & Security ──────────────────────────
+        "python-dotenv",
+        "pydantic",
+        "pydantic-settings",
+        "pyjwt",
+        "bcrypt",
+        "passlib",
+        "cryptography",
+        "pyotp",
+        "python-multipart",
+
+        # ── Date & Time ────────────────────────────────────────
+        "python-dateutil",
+        "parsedatetime",
+        "pendulum",
+        "pytz",
+        "arrow",
+        "dateparser",
+        "freezegun",
+        "schedule",
+
+        # ── YAML / Config / Serialization ─────────────────────
+        "pyyaml",
+        "toml",
+        "orjson",
+        "ujson",
+        "msgpack",
+        "python-decouple",
+        "dynaconf",
+        "omegaconf",
+        "python-benedict",
+
+        # ── AI / ML / NLP ──────────────────────────────────────
+        "openai",
+        "anthropic",
+        "scikit-learn",
+        "scipy",
+        "statsmodels",
+        "nltk",
+        "textblob",
+        "langdetect",
+        "tiktoken",
+        "sympy",
+        "wordcloud",
+        "textstat",
+        "rapidfuzz",
+        "ftfy",
+        "unidecode",
+
+        # ── Async & Task Queues ────────────────────────────────
+        "anyio",
+        "aiofiles",
+        "janus",
+        "celery",
+        "rq",
+        "apscheduler",
+        "backoff",
+        "tenacity",
+
+        # ── Cloud & Storage ────────────────────────────────────
+        "boto3",
+        "google-auth",
+        "google-cloud-storage",
+        "azure-identity",
+        "azure-storage-blob",
+        "paramiko",
+        "fabric",
+
+        # ── Visualization ──────────────────────────────────────
+        "plotly",
+        "bokeh",
+        "seaborn",
+        "altair",
+
+        # ── Document Processing ────────────────────────────────
+        "python-docx",
+        "python-pptx",
+        "pypdf",
+        "pdfplumber",
+
+        # ── Windows-Specific ───────────────────────────────────
+        "pywin32",            # win32com
+        "winotify",           # Windows toast notifications
+        "pyperclip",
+        "send2trash",
+        "watchdog",
+
+        # ── TTS / Media ────────────────────────────────────────
+        "edge-tts",
+        "yt-dlp",
+
+        # ── Misc Utilities ─────────────────────────────────────
+        "jinja2",
+        "psutil",
+        "attrs",
+        "cattrs",
+        "cachetools",
+        "more-itertools",
+        "sortedcontainers",
+        "funcy",
+        "toolz",
+        "pathspec",
+        "parse",
+        "validators",
+        "babel",
+        "humanize",
+        "pycountry",
+        "phonenumbers",
+        "appdirs",
+        "platformdirs",
+        "dnspython",
+        "pyparsing",
+        "invoke",
+        "itsdangerous",
+        "mako",
+        "marshmallow",
+        "h5py",
+        "deepdiff",
+        "python-pptx",
+        "flasgger",
+
+        # ── Testing & Dev Tools ────────────────────────────────
+        "pytest",
+        "pytest-asyncio",
+        "pytest-cov",
+        "pytest-mock",
+        "pytest-xdist",
+        "coverage",
+        "mypy",
+        "black",
+        "ruff",
+        "flake8",
+        "pylint",
+        "isort",
+        "bandit",
+        "hypothesis",
+        "factory-boy",
+        "faker",
+        "responses",
+        "pre-commit",
+
+        # ── Already in script (kept for completeness) ──────────
         "pyinstaller"         # Package scripts as .exe
     )
 
