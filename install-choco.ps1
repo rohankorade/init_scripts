@@ -283,22 +283,18 @@ function Install-Scoop {
 
     Invoke-Step -Name "Scoop" -Item "Scoop package manager" -ContinueOnError $false -Action {
         $env:SCOOP = "$env:USERPROFILE\scoop"
-        # Scoop's installer blocks execution when run as Administrator unless -RunAsAdmin is passed.
-        # Piping irm ... | iex swallows parameters, so we must invoke via ScriptBlock to pass the flag.
-        & ([ScriptBlock]::Create((Invoke-RestMethod -Uri "https://get.scoop.sh"))) -RunAsAdmin
+        # Set execution policy required by Scoop, then invoke with -RunAsAdmin to allow admin installs.
+        # iex "& {$(irm ...)} -RunAsAdmin" is the only form that correctly passes the flag through.
+        Set-ExecutionPolicy RemoteSigned -Scope CurrentUser -Force
+        iex "& {$(irm get.scoop.sh)} -RunAsAdmin"
         Refresh-Env
         if (-not (Test-CommandExists "scoop")) { throw "scoop not found after install" }
         Write-Log "OK" "    Scoop installed to $env:SCOOP"
     }
 
-    # Add extras bucket (provides gifsicle and more)
+    # Add extras bucket (provides gifsicle)
     Invoke-Step -Name "Scoop" -Item "scoop bucket: extras" -Action {
         scoop bucket add extras 2>&1 | Out-Null
-    }
-
-    # Add java bucket for JDK installs
-    Invoke-Step -Name "Scoop" -Item "scoop bucket: java" -Action {
-        scoop bucket add java 2>&1 | Out-Null
     }
 }
 
@@ -308,16 +304,6 @@ function Install-Scoop {
 
 function Install-Winget {
     Write-Log "SECTION" "Installing winget"
-
-    # winget requires Windows App Runtime (WinUI 3 / WindowsAppSDK) which is
-    # not supported on Windows Server SKUs (exits 0x8000000B). Skip gracefully.
-    $os = (Get-WmiObject Win32_OperatingSystem).Caption
-    if ($os -match "Server") {
-        Write-Log "WARN" "winget is not supported on Windows Server SKUs (requires WinAppRuntime/WinUI 3 — Desktop only). Skipping."
-        Write-Log "INFO" "All packages in this script are installed via Chocolatey, so winget is not required."
-        Add-Result -Step "winget" -Item "winget" -Success $true -Detail "Skipped — not supported on Server SKU"
-        return
-    }
 
     if (Test-CommandExists "winget") {
         Write-Log "OK" "winget already installed: $(winget --version)"
@@ -351,7 +337,9 @@ function Install-WingetPackages {
     }
 
     $wingetPackages = [ordered]@{
-        "Google.Chrome" = "Google Chrome"
+        "Google.Chrome"                = "Google Chrome"
+        "Oracle.JDK.26"                = "Oracle JDK 26"
+        "Oracle.JavaRuntimeEnvironment" = "Oracle Java Runtime Environment"
     }
 
     foreach ($id in $wingetPackages.Keys) {
@@ -409,26 +397,76 @@ function Install-WindowsTerminal {
 }
 
 # ============================================================
-# REGION: Java (Eclipse Temurin 21 LTS via Chocolatey)
+# REGION: Java (Oracle JDK 26 + JRE via winget)
 # ============================================================
 
 function Install-Java {
     Write-Log "SECTION" "Installing Java"
 
+    # Java is installed via winget (Oracle.JDK.26 + Oracle.JavaRuntimeEnvironment) in Install-WingetPackages.
+    # This function's job is to locate the install, set JAVA_HOME, and patch PATH so
+    # java.exe is immediately usable in the current session without a reboot.
+
+    Refresh-Env
+
     if (Test-CommandExists "java") {
         $ver = & java -version 2>&1 | Select-Object -First 1
-        Write-Log "OK" "Java already installed: $ver"
+        Write-Log "OK" "Java already on PATH: $ver"
         Add-Result -Step "Java" -Item "java" -Success $true -Detail $ver
         return
     }
 
-    # Temurin (formerly AdoptOpenJDK) — LTS 21
-    Install-ChocoPackage -Step "Java" -PackageId "temurin21"
-    Refresh-Env
+    # Oracle JDK 26 writes to HKLM:\SOFTWARE\JavaSoft\JDK and installs under %ProgramFiles%\Java
+    Invoke-Step -Name "Java" -Item "Set JAVA_HOME + patch PATH" -Action {
+        $regPath = "HKLM:\SOFTWARE\JavaSoft\JDK"
+        $javaHome = $null
+
+        # Try registry first (most reliable) — Oracle writes JavaHome value per version subkey
+        if (Test-Path $regPath) {
+            $subKey = Get-ChildItem $regPath -ErrorAction SilentlyContinue |
+                      Where-Object { $_.PSChildName -like "26*" } |
+                      Select-Object -Last 1
+            if ($subKey) {
+                $javaHome = (Get-ItemProperty $subKey.PSPath -Name "JavaHome" -ErrorAction SilentlyContinue).JavaHome
+            }
+        }
+
+        # Fallback: glob under %ProgramFiles%\Java (Oracle default)
+        if (-not $javaHome) {
+            $javaHome = Get-ChildItem "$env:ProgramFiles\Java" -Filter "jdk-26*" -Directory `
+                            -ErrorAction SilentlyContinue | Select-Object -Last 1 | Select-Object -ExpandProperty FullName
+        }
+        # Fallback: Oracle sometimes installs directly under ProgramFiles root
+        if (-not $javaHome) {
+            $javaHome = Get-ChildItem "$env:ProgramFiles" -Filter "jdk-26*" -Directory `
+                            -ErrorAction SilentlyContinue | Select-Object -Last 1 | Select-Object -ExpandProperty FullName
+        }
+
+        if (-not $javaHome) { throw "Oracle JDK 26 install directory not found. Ensure winget installed it successfully." }
+
+        $javaBin = Join-Path $javaHome "bin"
+        Write-Log "INFO" "    Found Oracle JDK at: $javaHome"
+
+        # Set JAVA_HOME machine-wide
+        [Environment]::SetEnvironmentVariable("JAVA_HOME", $javaHome, "Machine")
+        $env:JAVA_HOME = $javaHome
+
+        # Patch machine PATH if bin not already there
+        $machinePath = [Environment]::GetEnvironmentVariable("Path", "Machine")
+        if ($machinePath -notlike "*$javaBin*") {
+            [Environment]::SetEnvironmentVariable("Path", "$machinePath;$javaBin", "Machine")
+        }
+        # Also patch current session immediately
+        if ($env:Path -notlike "*$javaBin*") {
+            $env:Path = "$env:Path;$javaBin"
+        }
+
+        Write-Log "OK" "    JAVA_HOME = $javaHome"
+    }
 
     Invoke-Step -Name "Java" -Item "Verify java in PATH" -Action {
-        if (-not (Test-CommandExists "java")) { throw "java not found after install" }
-        Write-Log "OK" "    $(java -version 2>&1 | Select-Object -First 1)"
+        if (-not (Test-CommandExists "java")) { throw "java not found in PATH after setup" }
+        Write-Log "OK" "    $(& java -version 2>&1 | Select-Object -First 1)"
     }
 }
 
@@ -714,15 +752,7 @@ function Install-ScoopPackages {
     Write-Log "SECTION" "Installing Scoop Packages"
 
     $scoopPackages = @(
-        "gifsicle",     # GIF optimizer (only reliably available via Scoop extras)
-        "jq",           # JSON processor
-        "fzf",          # Fuzzy finder
-        "ripgrep",      # Fast grep
-        "fd",           # Fast find replacement
-        "bat",          # Better cat
-        "lsd",          # Better ls
-        "zoxide",       # Smarter cd
-        "delta"         # Better git diff
+        "gifsicle"      # GIF optimizer — only reliably available via Scoop extras
     )
 
     foreach ($pkg in $scoopPackages) {
