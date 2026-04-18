@@ -43,7 +43,7 @@ param (
     [switch]$SkipFirewall,
 
     [Parameter(Mandatory = $false)]
-    [string]$LogPath = (Join-Path $PSScriptRoot "Setup-TailscaleRDP_$(Get-Date -Format 'yyyyMMdd_HHmmss').log")
+    [string]$LogPath = (Join-Path $(if ($PSScriptRoot) { $PSScriptRoot } else { $PWD.Path }) "Setup-TailscaleRDP_$(Get-Date -Format 'yyyyMMdd_HHmmss').log")
 )
 
 Set-StrictMode -Version Latest
